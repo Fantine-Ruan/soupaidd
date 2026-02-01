@@ -1,0 +1,287 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from collections import defaultdict
+import os
+
+# 页面配置（必须在最前面）
+st.set_page_config(
+    page_title="SoupAIDD 智能煲汤大脑",
+    page_icon="🍲",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# 加载数据
+current_folder = os.path.dirname(os.path.abspath(__file__))
+df = pd.read_csv(os.path.join(current_folder, 'history_cleaned.csv'))
+
+# 侧边栏控制
+st.sidebar.title("🎛️ 控制面板")
+st.sidebar.markdown("---")
+
+# 汤品筛选
+selected_soups = st.sidebar.multiselect(
+    "📊 选择要分析的汤品",
+    df['汤名'].unique(),
+    default=df['汤名'].unique()
+)
+
+# 日期范围筛选（如果有日期列）
+if '月份' in df.columns:
+    selected_months = st.sidebar.slider(
+        "📅 选择月份范围",
+        int(df['月份'].min()),
+        int(df['月份'].max()),
+        (int(df['月份'].min()), int(df['月份'].max()))
+    )
+    # 筛选数据
+    mask = (df['汤名'].isin(selected_soups)) & (df['月份'] >= selected_months[0]) & (df['月份'] <= selected_months[1])
+else:
+    mask = df['汤名'].isin(selected_soups)
+
+filtered_df = df[mask]
+
+# 主标题
+st.title("🍲 SoupAIDD 家庭煲汤数据驾驶舱")
+st.markdown("### 基于随机森林AI的智能膳食分析与推荐系统")
+st.markdown("---")
+
+# 顶部指标卡（4列布局）
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(
+        label="🥣 总煲汤次数", 
+        value=f"{len(filtered_df)}次",
+        delta=f"占比{len(filtered_df)/len(df)*100:.0f}%" if len(filtered_df) != len(df) else "全部数据"
+    )
+
+with col2:
+    avg_score = filtered_df['反馈分数'].mean() if len(filtered_df) > 0 else 0
+    st.metric(
+        label="⭐ 平均满意度", 
+        value=f"{avg_score:.1f}分",
+        delta=f"{avg_score-75:+.1f} vs 标准" if avg_score > 0 else "无数据"
+    )
+
+with col3:
+    if len(filtered_df) > 0:
+        top_soup = filtered_df['汤名'].value_counts().index[0]
+        top_count = filtered_df['汤名'].value_counts().iloc[0]
+        st.metric(
+            label="🏆 招牌汤品", 
+            value=f"{top_soup}",
+            delta=f"出现{top_count}次"
+        )
+    else:
+        st.metric(label="🏆 招牌汤品", value="无数据")
+
+with col4:
+    if len(filtered_df) > 0:
+        weekend_rate = filtered_df['是否周末'].mean() * 100
+        st.metric(
+            label="📅 周末煲汤率", 
+            value=f"{weekend_rate:.0f}%",
+            delta="周末偏好" if weekend_rate > 50 else "平日为主"
+        )
+    else:
+        st.metric(label="📅 周末煲汤率", value="0%")
+
+st.markdown("---")
+
+# 第一行：主分析区（左2/3）+ 智能推荐（右1/3）
+left_col, right_col = st.columns([2, 1])
+
+with left_col:
+    st.subheader("📈 汤品满意度分布分析")
+    
+    if len(filtered_df) > 0:
+        # 箱线图
+        fig = px.box(
+            filtered_df, 
+            x='汤名', 
+            y='反馈分数', 
+            color='汤名',
+            title="不同汤品的满意度稳定性与分布",
+            labels={'反馈分数': '满意度评分 (0-100)', '汤名': '汤品名称'},
+            points="all"  # 显示所有数据点
+        )
+        fig.update_layout(
+            showlegend=False,
+            height=400,
+            xaxis_tickangle=-45
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("⚠️ 请至少选择一种汤品进行分析")
+
+with right_col:
+    st.subheader("🎯 AI智能推荐")
+    
+    if len(filtered_df) > 0:
+        # 找出评分最高的汤
+        best_soup = filtered_df.groupby('汤名')['反馈分数'].mean().idxmax()
+        best_score = filtered_df.groupby('汤名')['反馈分数'].mean().max()
+        best_temp = filtered_df[filtered_df['汤名']==best_soup]['温度'].mean()
+        
+        # 推荐卡片
+        st.success(f"**明日推荐：{best_soup}**")
+        st.write(f"**历史评分：** {best_score:.1f}/100")
+        st.write(f"**适宜温度：** {best_temp:.1f}°C")
+        
+        # 查看食材
+        ing_cols = [c for c in filtered_df.columns if c.startswith('食材_')]
+        main_ings = [c.replace('食材_', '') for c in ing_cols 
+                     if filtered_df[filtered_df['汤名']==best_soup][c].sum() > 0]
+        
+        if main_ings:
+            st.info(f"**核心食材：** {', '.join(main_ings[:5])}")
+        
+        # 基于天气的建议
+        st.write("---")
+        st.write("**💡 烹饪建议：**")
+        if best_temp < 15:
+            st.write("• 天气较冷，建议延长煲煮时间（>2小时）")
+        elif best_temp > 28:
+            st.write("• 天气炎热，建议清淡快煮（<1小时）")
+        else:
+            st.write("• 温度适宜，标准烹制（1-1.5小时）")
+            
+        if filtered_df[filtered_df['汤名']==best_soup]['是否周末'].mean() > 0.5:
+            st.write("• 适合周末慢慢煲")
+        else:
+            st.write("• 工作日快手汤")
+    else:
+        st.info("请选择汤品查看推荐")
+
+# 第二行：多维度分析（标签页）
+st.markdown("---")
+st.subheader("🔍 多维度深度分析")
+
+tab1, tab2, tab3 = st.tabs(["🌡️ 温度趋势", "📊 季节规律", "🕸️ 食材关联"])
+
+with tab1:
+    if len(filtered_df) > 0:
+        fig = px.scatter(
+            filtered_df, 
+            x='温度', 
+            y='反馈分数', 
+            color='汤名',
+            size='是否周末',
+            size_max=20,
+            hover_data=['日期', '天气'],
+            trendline="ols",  # 添加趋势线
+            title="温度与满意度的相关性分析（气泡大小代表是否周末）",
+            labels={'温度': '气温 (°C)', '反馈分数': '满意度 (0-100)'}
+        )
+        fig.update_layout(height=500)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 显示相关系数
+        corr = filtered_df['温度'].corr(filtered_df['反馈分数'])
+        st.caption(f"📊 温度与满意度的皮尔逊相关系数：{corr:.3f}（{'正相关' if corr > 0 else '负相关'}）")
+    else:
+        st.warning("无数据可供分析")
+
+with tab2:
+    if len(filtered_df) > 0 and '季节编码' in filtered_df.columns:
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            # 旭日图
+            fig = px.sunburst(
+                filtered_df, 
+                path=['季节编码', '汤名'], 
+                values='反馈分数',
+                color='反馈分数',
+                color_continuous_scale='RdYlGn',
+                title="季节-汤品偏好分布（1=春, 2=夏, 3=秋, 4=冬）"
+            )
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col_right:
+            # 季节统计表
+            season_stats = filtered_df.groupby('季节编码').agg({
+                '汤名': 'count',
+                '反馈分数': 'mean',
+                '温度': 'mean'
+            }).round(1)
+            season_stats.columns = ['煲汤次数', '平均评分', '平均温度']
+            season_stats.index = ['春季', '夏季', '秋季', '冬季']
+            st.write("**季节统计表：**")
+            st.dataframe(season_stats, use_container_width=True)
+    else:
+        st.warning("缺少季节数据")
+
+with tab3:
+    st.subheader("食材配伍关联分析")
+    
+    # 计算食材共现
+    ing_cols = [c for c in filtered_df.columns if c.startswith('食材_')]
+    if len(ing_cols) > 0:
+        cooccur = defaultdict(int)
+        
+        for _, row in filtered_df.iterrows():
+            present_ings = [c.replace('食材_', '') for c in ing_cols if row[c] == 1]
+            for i in range(len(present_ings)):
+                for j in range(i+1, len(present_ings)):
+                    pair = tuple(sorted([present_ings[i], present_ings[j]]))
+                    cooccur[pair] += 1
+        
+        if cooccur:
+            # 取Top 10
+            top_pairs = sorted(cooccur.items(), key=lambda x: x[1], reverse=True)[:10]
+            pairs_df = pd.DataFrame(
+                [(f"{p[0]} + {p[1]}", c) for p, c in top_pairs], 
+                columns=['食材组合', '共现次数']
+            )
+            
+            fig = px.bar(
+                pairs_df, 
+                x='共现次数', 
+                y='食材组合', 
+                orientation='h',
+                color='共现次数',
+                color_continuous_scale='Viridis',
+                title="经常一起出现的食材组合（配伍规律）"
+            )
+            fig.update_layout(height=500, yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.caption("💡 提示：连线越粗的食材组合，说明妈妈越喜欢一起煲")
+        else:
+            st.info("当前筛选条件下食材共现数据不足")
+    else:
+        st.warning("未找到食材数据列")
+
+# 第三行：原始数据查看与导出
+st.markdown("---")
+st.subheader("📋 原始数据查看与导出")
+
+# 选择要显示的列
+display_cols = ['日期', '汤名', '温度', '反馈分数', '天气', '星期']
+available_cols = [c for c in display_cols if c in filtered_df.columns]
+if available_cols:
+    st.dataframe(
+        filtered_df[available_cols], 
+        use_container_width=True,
+        height=300
+    )
+    
+    # 下载按钮
+    csv = filtered_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 下载当前筛选数据为CSV",
+        data=csv,
+        file_name='filtered_soup_data.csv',
+        mime='text/csv',
+    )
+else:
+    st.write("数据预览")
+
+# 底部信息
+st.markdown("---")
+st.caption("🍲 Powered by SoupAIDD | 结合传统中医智慧与现代机器学习 | 数据驱动的美味决策支持系统")
