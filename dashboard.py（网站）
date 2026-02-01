@@ -1,3 +1,12 @@
+# 放在文件第一行
+import sys
+class DummyStdin:
+    def readline(self): 
+        return "2024-01-01\n"  # 欺骗 input() 函数
+
+sys.stdin = DummyStdin()  # 防止 input() 卡死
+
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
